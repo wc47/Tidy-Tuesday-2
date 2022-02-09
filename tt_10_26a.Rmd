@@ -1,0 +1,218 @@
+---
+title: "Ultra Running Statistics"
+author: "Wyatt Clegg"
+date: "11/3/2021"
+output: pdf_document
+---
+
+```{r setup, include=FALSE, message = FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+# Introduction
+The data this week comes from Benjamin Nowak by way of International Trail Running Association (ITRA). Their original repo is available on GitHub.
+
+A nice overview of some similar running statistics is available RunRepeat.com.
+
+In this study, we explore the trends in ultra running over the last 23 years. We have analyzed 5,010,730 results from 15,451 ultra running events, making this the largest study ever done on the sport.
+
+\underline{Key results}
+Female ultra runners are faster than male ultra runners at distances over 195 miles. The longer the distance the shorter the gender pace gap. In 5Ks men run 17.9% faster than women, at marathon distance the difference is just 11.1%, 100-mile races see the difference shrink to just .25%, and above 195 miles, women are actually 0.6% faster than men.
+Participation has increased by 1676% in the last 23 years from 34,401 to 611,098 yearly participations and 345% in the last 10 years from 137,234 to 611,098. There have never been more ultra runners.
+More ultra runners are competing in multiple events per year. In 1996, only 14% of runners participated in multiple races a year, now 41% of participants run more than one event per year. There is also a significant increase in the % of people who run 2 races a year, 17.2% (from 7.7% to 24.9%) and 3 races, 6.7% (from 2.8% to 9.5%).
+
+# Analysis
+## Define Libraries & Functions
+```{r}
+library(tidyverse)
+library(tidymodels)
+```
+## Read In & Clean Data
+```{r, eval = TRUE}
+ultra_rankings <- 
+  readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-10-26/ultra_rankings.csv') %>% 
+  mutate(nationality_Abb = if_else(nationality %in% c("USA", "FRA", "GBR", "JPN", "ESP", "CHN", "CAN"), nationality,
+                                   "Other"))
+race <- readr::read_csv('https://raw.githubusercontent.com/rfordatascience/tidytuesday/master/data/2021/2021-10-26/race.csv')
+
+finalData <- ultra_rankings %>% 
+  drop_na(age, gender, time_in_seconds) %>% 
+  left_join(race, by = c("race_year_id")) %>% 
+  drop_na(elevation_gain, elevation_loss, distance) %>% 
+  mutate(time_in_minutes = time_in_seconds / 60,
+         time_in_hours = time_in_minutes / 60,
+         netElevation = elevation_gain - abs(elevation_loss),
+         elevationRatio = elevation_gain / 
+           elevation_loss) %>% 
+  group_by(nationality) %>% mutate(nationN = n()) %>%
+  ungroup %>% 
+  mutate(nationality_Abb = 
+           if_else(nationN > 1000, 
+                   nationality, "Other"))%>% 
+  filter(distance > 0)
+```
+
+## Exploratory Data Analysis
+```{r, echo = FALSE, eval = TRUE}
+racePlot <- ggplot(finalData,
+                   aes(x = date, y = distance, col = elevation_gain)) + 
+  geom_jitter() + 
+  labs(x = "Date", y = "Distance", title = "Races") + 
+  scale_color_continuous(type = "viridis") + 
+  theme_bw()
+
+race2Plot <- ggplot(finalData,
+                    aes(y = distance, 
+                        x = aid_stations, 
+                        col = elevation_gain)) + 
+  geom_jitter(size = 0.3) + 
+  labs(x = "", y = "Distance", title = "Races") + 
+  scale_color_continuous(type = "viridis") + 
+  theme_bw()
+
+nationalityPlot <- ggplot(finalData,
+                          aes(x = time_in_seconds / 
+                                (60 * 60),
+                              y = distance *
+                                elevation_gain,
+                              col = gender)) + 
+  geom_point(size = 0.3) + facet_wrap(~nationality_Abb) + 
+  theme_bw() + 
+  scale_color_brewer(palette = "Set1", name = "Gender") +
+  labs(x = "Time in Hours", y = "Distance (Miles) x Elevation")
+
+run_split <- initial_split(finalData, prop = 0.95)
+train_data <- training(run_split)
+test_data <- testing(run_split)
+racePlot
+race2Plot
+nationalityPlot
+```
+
+We can clearly see that most of these races are quite extreme. Furthermore, the elevation change in many of these races also varies a fair amount.
+
+Table 2 summarizes the change year by year. We can see that participation has increased vastly.
+
+```{r, echo = FALSE}
+nationTable <- finalData %>% 
+  distinct(runner, nationality_Abb) %>% 
+  group_by(nationality_Abb) %>% tally %>% 
+  arrange(desc(n))
+
+knitr::kable(nationTable, 
+             caption = "Runners by Nationality")
+
+table1 <- finalData %>% 
+  mutate(year = str_sub(date, 1, 4)) %>% 
+  group_by(year) %>% 
+  summarise(N = n(), nRunners = length(unique(runner)),
+            nRaces = length(unique(race)),
+            nRaceCities = length(unique(city)),
+            nRaceCountries = length(unique(country)),
+            nParticipants = paste0(median(participants),
+                                   " (", quantile(participants, 
+                                                 probs = 0.25),
+                                   ", ", quantile(participants,
+                                                  probs = 0.75), 
+                                   ")"),
+            nAidStations = paste0(median(aid_stations),
+                                   " (", quantile(aid_stations, 
+                                                 probs = 0.25),
+                                   ", ", quantile(aid_stations,
+                                                  probs = 0.75), 
+                                   ")"),
+            nMales = paste0(sum(gender == "M"), " (",
+                            round(100 * mean(gender == "M"), 
+                                  digits = 1), ")"),
+            nFemales = paste0(sum(gender == "W"), " (",
+                           round(100 * mean(gender == "W"),
+                                 digits = 1), ")"),
+            age = paste0(median(age), " (",
+                         paste(quantile(age, 
+                                        probs = c(0.25, 0.75)),
+                               collapse = ", "), ")"))
+colnames(table1) <- c("Year", "N", "# Runners", "# Races",
+                      "# Race Cities", "# Race Countries",
+                      "# Participants / Race", "# Aid Stations / Race",
+                      "# Females", "# Males", "Age")
+knitr::kable(table1, caption = "Summary Statistics")
+```
+
+```{r, echo = FALSE}
+corTable <- cor(train_data[, c("age", "elevation_gain", 
+                   "distance", "age", "aid_stations")]) 
+knitr::kable(corTable, caption = "Correlation Among Numeric Variables")
+
+# Collinearity may be a problem between elevation & distance
+colPlot <- ggplot(finalData, aes(x = distance, y = elevation_gain)) + 
+  geom_point() + theme_bw() + 
+  labs(x = "Distance", y = "Elevation Gain", 
+       title = "Collinearity Plot")
+colPlot
+```
+
+```{r}
+fit1 <- lm(time_in_minutes ~ aid_stations + #rank + 
+               age + 
+               gender + elevation_gain*distance ,
+             data = train_data)
+```
+
+```{r, echo = FALSE}
+basePlot <- ggplot(train_data, 
+                   aes(y = time_in_minutes / 60, x = distance, 
+                       col = elevation_gain)) +
+  geom_point(size = 0.5) + facet_wrap(~gender) + 
+  scale_color_continuous(type = "viridis")
+
+newData <- 
+  as.data.frame(expand_grid(elevation_gain = c(0, 5000, 10000),
+            distance = seq(0, 200, length.out = 100),
+            aid_stations = c(13),
+            gender = c("M", "W"),
+            age = mean(train_data$age))) %>% 
+  mutate(group = paste0("Sex: ", gender, " Age:", age, 
+                        "Net Elevation: ", elevation_gain,
+                        "Aid Stations: ", aid_stations))
+predObject <- predict(fit1, newdata = newData, se = TRUE)
+newData$time_in_minutes <- predObject$fit
+newData$upper <- predObject$fit + 2 * predObject$se.fit
+newData$low <- predObject$fit - 2 * predObject$se.fit
+
+
+fit1Plot <- basePlot + 
+  geom_ribbon(data = newData, 
+              aes(grouping = group, ymin = low / 60, 
+                  ymax = upper / 60,
+                  fill = elevation_gain),
+              alpha = 0.3) +
+  geom_line(data = newData %>% arrange(group, distance),
+            aes(grouping = group)) + 
+  geom_line(data = newData %>% arrange(group, distance),
+            aes(grouping = group, y = upper / 60), lty = 2,
+            col = "white") + 
+  geom_line(data = newData %>% arrange(group, distance),
+            aes(grouping = group, y = low / 60), lty = 2,
+            col  = "white") +
+  theme_bw() + 
+  labs(x = "Distance in km", y = "Time in Hours", 
+       title = "Best Fit for Ultra Runner Data")
+
+
+# summary(fit1)
+predictedErrors <- predict(fit1, new_data = test_data) - 
+  test_data$time_in_minutes
+RPMSE <- sqrt(mean(predictedErrors^2))
+
+train_data$yhat <- predict(fit1)
+train_data$resid <- residuals(fit1)
+train_data <- train_data %>% 
+  mutate(oddy = if_else(nationality %in% c("CHI", "ARG"),
+                        nationality, "Other"))
+pvrPlot <- ggplot(train_data, aes(x = yhat, y = resid)) + 
+  geom_hline(yintercept = 0, col = "red", lty = 2) +
+  geom_point() + facet_wrap(~nationality_Abb) + 
+  theme_bw()
+fit1Plot
+pvrPlot
+```
+
